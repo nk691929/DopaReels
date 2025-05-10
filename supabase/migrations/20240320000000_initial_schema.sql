@@ -1,0 +1,273 @@
+-- Drop all existing tables and functions
+DROP TABLE IF EXISTS notifications CASCADE;
+DROP TABLE IF EXISTS follows CASCADE;
+DROP TABLE IF EXISTS favourites CASCADE;
+DROP TABLE IF EXISTS comments CASCADE;
+DROP TABLE IF EXISTS likes CASCADE;
+DROP TABLE IF EXISTS video_views CASCADE;
+DROP TABLE IF EXISTS videos CASCADE;
+DROP TABLE IF EXISTS user_settings CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
+
+DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;
+DROP FUNCTION IF EXISTS update_video_view_count() CASCADE;
+
+-- Enable necessary extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Create users table
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email TEXT UNIQUE NOT NULL,
+    fullname TEXT,
+    username TEXT UNIQUE,
+    bio TEXT,
+    photo_url TEXT,
+    phone TEXT,
+    website TEXT,
+    location TEXT,
+    gender TEXT,
+    birthdate DATE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create user_settings table
+CREATE TABLE user_settings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    theme TEXT DEFAULT 'system',
+    notification_enabled BOOLEAN DEFAULT true,
+    email_notifications BOOLEAN DEFAULT true,
+    push_notifications BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id)
+);
+
+-- Create videos table
+CREATE TABLE videos (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    video_url TEXT NOT NULL,
+    thumbnail_url TEXT,
+    type TEXT NOT NULL CHECK (type IN ('short', 'story')),
+    caption TEXT,
+    view_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create video_views table
+CREATE TABLE video_views (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    video_id UUID REFERENCES videos(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create likes table
+CREATE TABLE likes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    video_id UUID REFERENCES videos(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, video_id)
+);
+
+-- Create comments table
+CREATE TABLE comments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    video_id UUID REFERENCES videos(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create favourites table
+CREATE TABLE favourites (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    video_id UUID REFERENCES videos(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, video_id)
+);
+
+-- Create follows table
+CREATE TABLE follows (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    follower_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    following_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(follower_id, following_id)
+);
+
+-- Create notifications table
+CREATE TABLE notifications (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    is_read BOOLEAN DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create function to update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- Create function to update video view count
+CREATE OR REPLACE FUNCTION update_video_view_count()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE videos
+    SET view_count = view_count + 1
+    WHERE id = NEW.video_id;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- Create triggers for updated_at
+CREATE TRIGGER update_users_updated_at
+    BEFORE UPDATE ON users
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_user_settings_updated_at
+    BEFORE UPDATE ON user_settings
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_videos_updated_at
+    BEFORE UPDATE ON videos
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_comments_updated_at
+    BEFORE UPDATE ON comments
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Create trigger for view count
+CREATE TRIGGER update_video_views
+    AFTER INSERT ON video_views
+    FOR EACH ROW
+    EXECUTE FUNCTION update_video_view_count();
+
+-- Enable Row Level Security
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE videos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE video_views ENABLE ROW LEVEL SECURITY;
+ALTER TABLE likes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE favourites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE follows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+
+-- Create RLS Policies
+
+-- Users policies
+CREATE POLICY "Users can view all users" ON users
+    FOR SELECT USING (true);
+
+CREATE POLICY "Users can update their own profile" ON users
+    FOR UPDATE USING (auth.uid() = id);
+
+-- User settings policies
+CREATE POLICY "Users can view their own settings" ON user_settings
+    FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own settings" ON user_settings
+    FOR UPDATE USING (auth.uid() = user_id);
+
+-- Videos policies
+CREATE POLICY "Users can view all videos" ON videos
+    FOR SELECT USING (true);
+
+CREATE POLICY "Users can create videos" ON videos
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own videos" ON videos
+    FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own videos" ON videos
+    FOR DELETE USING (auth.uid() = user_id);
+
+-- Video views policies
+CREATE POLICY "Users can view all video views" ON video_views
+    FOR SELECT USING (true);
+
+CREATE POLICY "Users can create video views" ON video_views
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+-- Likes policies
+CREATE POLICY "Users can view all likes" ON likes
+    FOR SELECT USING (true);
+
+CREATE POLICY "Users can create likes" ON likes
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own likes" ON likes
+    FOR DELETE USING (auth.uid() = user_id);
+
+-- Comments policies
+CREATE POLICY "Users can view all comments" ON comments
+    FOR SELECT USING (true);
+
+CREATE POLICY "Users can create comments" ON comments
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own comments" ON comments
+    FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own comments" ON comments
+    FOR DELETE USING (auth.uid() = user_id);
+
+-- Favourites policies
+CREATE POLICY "Users can view their own favourites" ON favourites
+    FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can create favourites" ON favourites
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own favourites" ON favourites
+    FOR DELETE USING (auth.uid() = user_id);
+
+-- Follows policies
+CREATE POLICY "Users can view all follows" ON follows
+    FOR SELECT USING (true);
+
+CREATE POLICY "Users can create follows" ON follows
+    FOR INSERT WITH CHECK (auth.uid() = follower_id);
+
+CREATE POLICY "Users can delete their own follows" ON follows
+    FOR DELETE USING (auth.uid() = follower_id);
+
+-- Notifications policies
+CREATE POLICY "Users can view their own notifications" ON notifications
+    FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own notifications" ON notifications
+    FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own notifications" ON notifications
+    FOR DELETE USING (auth.uid() = user_id);
+
+-- Create indexes for better performance
+CREATE INDEX idx_videos_user_id ON videos(user_id);
+CREATE INDEX idx_videos_type ON videos(type);
+CREATE INDEX idx_videos_created_at ON videos(created_at);
+CREATE INDEX idx_likes_video_id ON likes(video_id);
+CREATE INDEX idx_comments_video_id ON comments(video_id);
+CREATE INDEX idx_favourites_user_id ON favourites(user_id);
+CREATE INDEX idx_follows_follower_id ON follows(follower_id);
+CREATE INDEX idx_follows_following_id ON follows(following_id);
+CREATE INDEX idx_notifications_user_id ON notifications(user_id);
+CREATE INDEX idx_video_views_video_id ON video_views(video_id); 
